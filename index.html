@@ -1,0 +1,965 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Inspección Residuos 3D</title>
+    
+    <!-- Leaflet para capas base 2D -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- MapLibre GL para 3D -->
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.0.0/dist/maplibre-gl.css" />
+    <script src="https://unpkg.com/maplibre-gl@4.0.0/dist/maplibre-gl.js"></script>
+    
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', Roboto, sans-serif; }
+        body { height: 100vh; overflow: hidden; }
+        .app { display: flex; height: 100%; width: 100%; }
+        
+        .map-container {
+            flex: 1;
+            position: relative;
+        }
+        
+        #map {
+            height: 100%;
+            width: 100%;
+            background: #1a3a3a;
+        }
+        
+        /* Mapa 3D (se superpone al 2D) */
+        #map3d {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 100;
+            pointer-events: auto;
+            display: none;
+            background: #1a3a3a;
+        }
+        #map3d.active {
+            display: block;
+        }
+        #map.hidden {
+            display: none;
+        }
+        
+        /* Botón para cambiar entre 2D y 3D */
+        .map-toggle {
+            position: absolute;
+            top: 80px;
+            left: 15px;
+            z-index: 1000;
+            background: rgba(0,0,0,0.7);
+            backdrop-filter: blur(8px);
+            border: 1px solid #2ecc71;
+            color: white;
+            padding: 10px 15px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: 0.3s;
+        }
+        .map-toggle:hover {
+            background: rgba(46, 204, 113, 0.3);
+        }
+        .map-toggle.active {
+            background: rgba(46, 204, 113, 0.4);
+            border-color: #27ae60;
+        }
+        
+        /* Controles 3D */
+        .controls-3d {
+            position: absolute;
+            bottom: 80px;
+            right: 20px;
+            z-index: 1000;
+            display: none;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .controls-3d.visible {
+            display: flex;
+        }
+        .controls-3d button {
+            background: rgba(0,0,0,0.7);
+            backdrop-filter: blur(8px);
+            border: 1px solid #2ecc71;
+            color: white;
+            width: 40px;
+            height: 40px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 18px;
+            transition: 0.3s;
+        }
+        .controls-3d button:hover {
+            background: rgba(46, 204, 113, 0.3);
+        }
+        .controls-3d button.active {
+            border-color: #2ecc71;
+            background: rgba(46, 204, 113, 0.2);
+        }
+        
+        /* Resto de estilos igual que antes */
+        .info-panel { width: 330px; background: rgba(20, 30, 35, 0.96); backdrop-filter: blur(12px); border-left: 3px solid #2ecc71; display: flex; flex-direction: column; overflow-y: auto; color: #ecf0f1; z-index: 1000; box-shadow: -5px 0 20px rgba(0,0,0,0.4); }
+        .panel-header { padding: 20px 18px 12px; border-bottom: 1px solid #2ecc7144; }
+        .panel-header h2 { font-size: 1.3rem; display: flex; align-items: center; gap: 10px; color: #2ecc71; }
+        .panel-header p { font-size: 0.75rem; opacity: 0.7; margin-top: 6px; }
+        .point-card { background: #1e2f3a; margin: 16px; padding: 16px; border-radius: 18px; border-left: 4px solid #f39c12; }
+        .point-name { font-size: 1.25rem; font-weight: bold; color: #f1c40f; margin-bottom: 8px; }
+        .waste-list { margin: 12px 0; background: #0f1a20; border-radius: 14px; padding: 10px; }
+        .waste-item { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #2c3e44; font-size: 0.85rem; }
+        .waste-type { display: flex; align-items: center; gap: 8px; }
+        .waste-volume { font-weight: bold; color: #f39c12; }
+        .accumulated-box { background: #0a1a1f; border-radius: 40px; padding: 10px 15px; margin-top: 12px; display: flex; justify-content: space-between; align-items: baseline; }
+        .accumulated-label { font-size: 0.8rem; color: #bdc3c7; }
+        .accumulated-value { font-size: 1.6rem; font-weight: bold; color: #2ecc71; }
+        .stop-timer { margin-top: 12px; background: #1e2a32; border-radius: 40px; padding: 8px 15px; display: flex; justify-content: space-between; align-items: center; }
+        .countdown-number { font-size: 1.5rem; font-weight: bold; font-family: monospace; color: #e67e22; }
+        .progress-bar { height: 5px; background: #2c3e50; border-radius: 5px; margin-top: 8px; overflow: hidden; }
+        .progress-fill { width: 0%; height: 100%; background: #2ecc71; transition: width 0.2s linear; }
+        .points-list { margin: 10px 16px 20px; }
+        .points-list h3 { font-size: 0.9rem; margin-bottom: 12px; color: #95a5a6; }
+        .point-item { background: #1e2a32; border-radius: 14px; padding: 10px 12px; margin-bottom: 8px; cursor: pointer; transition: 0.2s; border-left: 3px solid transparent; }
+        .point-item.active { background: #2ecc7122; border-left-color: #2ecc71; }
+        .point-item.visited { opacity: 0.6; background: #111c22; }
+        .point-name-list { font-weight: 600; display: flex; justify-content: space-between; }
+        .point-total { font-size: 0.7rem; color: #f39c12; }
+        
+        .top-bar { position: absolute; top: 15px; left: 15px; z-index: 1000; display: flex; gap: 10px; background: rgba(0,0,0,0.65); backdrop-filter: blur(8px); padding: 8px 16px; border-radius: 50px; }
+        .btn { border: none; padding: 7px 16px; border-radius: 40px; font-weight: bold; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; font-size: 0.8rem; transition: 0.2s; }
+        .btn-primary { background: #27ae60; color: white; }
+        .btn-secondary { background: #2c3e50; color: white; }
+        .btn-danger { background: #c0392b; color: white; }
+        .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        
+        .speed-control { position: absolute; bottom: 20px; right: 20px; background: rgba(0,0,0,0.7); backdrop-filter: blur(8px); border-radius: 12px; padding: 10px 15px; width: 200px; z-index: 1000; border: 1px solid #2ecc71; }
+        .legend { position: absolute; bottom: 20px; left: 20px; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); padding: 6px 12px; border-radius: 20px; font-size: 0.7rem; z-index: 1000; color: white; }
+        .leaflet-routing-container { display: none !important; }
+        
+        .animated-point { width: 16px; height: 16px; background: radial-gradient(circle, #FFD700, #FFA500); border-radius: 50%; box-shadow: 0 0 0 0 rgba(255, 215, 0, 0.7); animation: pulse 1.5s infinite; border: 2px solid white; }
+        @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(255, 215, 0, 0.7); transform: scale(1); } 70% { box-shadow: 0 0 0 10px rgba(255, 215, 0, 0); transform: scale(1.2); } 100% { box-shadow: 0 0 0 0 rgba(255, 215, 0, 0); transform: scale(1); } }
+        
+        .custom-layer-control { background: rgba(0,0,0,0.7); backdrop-filter: blur(8px); padding: 6px 10px; border-radius: 8px; color: white; font-size: 14px; border: 1px solid #2ecc71; cursor: pointer; display: flex; align-items: center; gap: 8px; z-index: 1000; }
+        .layer-select { background: #2c3e50; border: none; color: white; padding: 4px 8px; border-radius: 6px; cursor: pointer; font-size: 12px; }
+        .layer-select option { background: #1e2a32; }
+        .vehicle-centered { z-index: 2000 !important; }
+        
+        .mini-pie-container { display: flex; align-items: center; gap: 12px; background: #0f1a20; border-radius: 14px; padding: 8px 12px; margin: 8px 0; }
+        .mini-pie-canvas { flex-shrink: 0; border-radius: 50%; background: transparent; }
+        .waste-detail { flex: 1; font-size: 0.8rem; }
+        .waste-detail-item { display: flex; justify-content: space-between; padding: 2px 0; }
+        .waste-percent { color: #bdc3c7; font-size: 0.7rem; }
+        .waste-color-dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; }
+        .waste-name { display: flex; align-items: center; }
+        .waste-value { font-weight: bold; color: #f39c12; }
+        .total-vol { text-align: right; font-size: 0.7rem; color: #95a5a6; margin-top: 4px; }
+        
+        .simple-marker { background: #2ecc71; width: 12px; height: 12px; border-radius: 50%; border: 2px solid white; box-shadow: 0 0 0 2px rgba(46, 204, 113, 0.4); }
+        .simple-marker-visited { background: #95a5a6; border-color: #7f8c8d; box-shadow: 0 0 0 2px rgba(149, 165, 166, 0.4); }
+    </style>
+</head>
+<body>
+<div class="app">
+    <div class="map-container">
+        <!-- Mapa 2D (Leaflet) -->
+        <div id="map"></div>
+        
+        <!-- Mapa 3D (MapLibre) -->
+        <div id="map3d"></div>
+        
+        <!-- Botón 2D/3D -->
+        <button class="map-toggle" id="toggleMap">
+            <i class="fas fa-cube"></i> <span id="toggleLabel">Activar 3D</span>
+        </button>
+        
+        <!-- Controles 3D -->
+        <div class="controls-3d" id="controls3d">
+            <button id="resetView" title="Resetear vista"><i class="fas fa-home"></i></button>
+            <button id="toggleTerrain" title="Alternar terreno" class="active"><i class="fas fa-mountain"></i></button>
+            <button id="toggleBuildings" title="Alternar edificios" class="active"><i class="fas fa-building"></i></button>
+        </div>
+        
+        <div class="top-bar">
+            <button class="btn btn-primary" id="startBtn"><i class="fas fa-play"></i> Iniciar</button>
+            <button class="btn btn-secondary" id="pauseBtn"><i class="fas fa-pause"></i> Pausar</button>
+            <button class="btn btn-danger" id="stopBtn"><i class="fas fa-stop"></i> Reiniciar</button>
+        </div>
+        <div class="speed-control">
+            <label style="color:#ddd;">Velocidad <i class="fas fa-tachometer-alt"></i></label>
+            <input type="range" min="0.5" max="20" step="0.5" value="3" id="speedSlider" style="width:100%">
+            <div class="speed-value" id="speedValue" style="text-align:center;color:#f1c40f;">3.0x</div>
+        </div>
+        <div class="legend">
+            <i class="fas fa-circle" style="color:#2ecc71;"></i> Punto activo &nbsp;|&nbsp; <i class="fas fa-circle" style="color:#95a5a6;"></i> Visitado
+        </div>
+        <div class="custom-layer-control" style="position: absolute; top: 15px; right: 15px;">
+            <i class="fas fa-map"></i> Mapa:
+            <select id="mapSelector" class="layer-select">
+                <option value="esri">Satélite (ESRI)</option>
+                <option value="ign">IGN España (Topográfico)</option>
+                <option value="ign_orto">IGN Ortofoto (PNOA)</option>
+                <option value="osm">OpenStreetMap</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="info-panel">
+        <div class="panel-header">
+            <h2><i class="fas fa-leaf"></i> Inspección ambiental 3D</h2>
+            <p>Estepona | Residuos · Volumen acumulado</p>
+        </div>
+        <div class="point-card" id="activePointCard">
+            <div class="point-name" id="pointName">---</div>
+            <div id="wasteDetailContainer"></div>
+            <div class="accumulated-box">
+                <span class="accumulated-label"><i class="fas fa-chart-simple"></i> Acumulado inspección:</span>
+                <span class="accumulated-value" id="accumulatedVolume">0</span> <span style="font-size:0.8rem;">m³</span>
+            </div>
+            <div class="stop-timer">
+                <span><i class="fas fa-hourglass-half"></i> Parada técnica:</span>
+                <span class="countdown-number" id="countdownDisplay">0</span>
+            </div>
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+        </div>
+        <div class="points-list">
+            <h3><i class="fas fa-map-marker-alt"></i> Puntos de inspección</h3>
+            <div id="pointsListContainer"></div>
+        </div>
+    </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.js"></script>
+
+<script>
+    // ================= DATOS DE PUNTOS =================
+    const INSPECTION_POINTS = [
+        { id:1, name:"Parque Los Reales", lat:36.4320, lng:-5.1380, wastes:[{type:"Plásticos",volume:2.5,color:"#e74c3c"},{type:"Vidrio",volume:1.2,color:"#3498db"}] },
+        { id:2, name:"Centro Urbano", lat:36.4267, lng:-5.1450, wastes:[{type:"Orgánico",volume:3.0,color:"#2ecc71"},{type:"Papel/Cartón",volume:1.8,color:"#9b59b6"},{type:"Plásticos",volume:1.5,color:"#e74c3c"}] },
+        { id:3, name:"Zona Oeste", lat:36.4240, lng:-5.1580, wastes:[{type:"Metales",volume:2.0,color:"#f39c12"},{type:"Vidrio",volume:1.4,color:"#3498db"}] },
+        { id:4, name:"Polígono Industrial", lat:36.4375, lng:-5.1485, wastes:[{type:"Metales",volume:4.2,color:"#f39c12"},{type:"Plásticos industriales",volume:3.1,color:"#e67e22"},{type:"Peligrosos",volume:0.8,color:"#e74c3c"}] },
+        { id:5, name:"Urbanización Selwo", lat:36.4190, lng:-5.1420, wastes:[{type:"Orgánico",volume:2.2,color:"#2ecc71"},{type:"Vidrio",volume:1.0,color:"#3498db"},{type:"Papel",volume:1.7,color:"#9b59b6"}] }
+    ];
+
+    // ================= VARIABLES GLOBALES =================
+    let map, map3d, activeBaseLayer, routingControl, vehicleMarker, routePoints = [], routeCoordinates = [];
+    let currentRouteIndex = 0, isAnimating = false, isStoppedAtPoint = false, stopTimerInterval = null;
+    let moveInterval = null, currentPointIdx = -1, accumulatedTotal = 0, animationSpeed = 3, visitedPoints = new Set();
+    let markersGroup = L.layerGroup();
+    let pointMarkers = [];
+    let is3dActive = false;
+    let terrainEnabled = true;
+    let buildingsEnabled = true;
+    let maplibreMarkers = [];
+
+    // ================= CAPAS BASE 2D =================
+    const baseLayers = {
+        esri: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            attribution: 'Tiles &copy; Esri',
+            maxZoom: 19
+        }),
+        ign: L.tileLayer('https://www.ign.es/wmts/mapa-raster?request=GetTile&service=WMTS&version=1.0.0&layer=MTN&style=default&tilematrixset=GoogleMapsCompatible&format=image/jpeg&TileMatrix={z}&TileCol={x}&TileRow={y}', {
+            attribution: '&copy; IGN España',
+            maxZoom: 18
+        }),
+        ign_orto: L.tileLayer('https://www.ign.es/wmts/pnoa-ma?request=GetTile&service=WMTS&version=1.0.0&layer=OI.OrthoimageCoverage&style=default&tilematrixset=GoogleMapsCompatible&format=image/jpeg&TileMatrix={z}&TileCol={x}&TileRow={y}', {
+            attribution: '&copy; IGN España (PNOA)',
+            maxZoom: 19
+        }),
+        osm: L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap',
+            maxZoom: 19
+        })
+    };
+
+    // ================= FUNCIONES DEL MAPA 3D (CORREGIDAS) =================
+    function initMap3d() {
+        console.log('🔄 Inicializando mapa 3D...');
+        const container = document.getElementById('map3d');
+        
+        // Estilo de mapa que funciona correctamente
+        const styleUrl = 'https://tiles.stadiamaps.com/styles/alidade_smooth.json';
+        
+        map3d = new maplibregl.Map({
+            container: 'map3d',
+            style: styleUrl,
+            center: [-5.1450, 36.4267],
+            zoom: 14.5,
+            pitch: 50,
+            bearing: 0,
+            antialias: true
+        });
+        
+        map3d.on('load', function() {
+            console.log('✅ Mapa 3D cargado correctamente');
+            
+            // Añadir terreno 3D con DEM de MapLibre
+            try {
+                map3d.addSource('terrain-source', {
+                    'type': 'raster-dem',
+                    'url': 'https://demotiles.maplibre.org/tiles.json',
+                    'tileSize': 256,
+                    'maxzoom': 14
+                });
+                map3d.setTerrain({ 'source': 'terrain-source', 'exaggeration': 1.8 });
+                console.log('✅ Terreno 3D activado');
+            } catch(e) {
+                console.warn('⚠️ No se pudo activar el terreno:', e);
+            }
+            
+            // Añadir edificios 3D desde OpenMapTiles
+            try {
+                map3d.addSource('buildings-source', {
+                    'type': 'vector',
+                    'url': 'https://tiles.stadiamaps.com/data/openmaptiles.json'
+                });
+                
+                map3d.addLayer({
+                    'id': 'buildings-3d',
+                    'source': 'buildings-source',
+                    'source-layer': 'building',
+                    'type': 'fill-extrusion',
+                    'paint': {
+                        'fill-extrusion-color': [
+                            'interpolate', ['linear'], ['get', 'render_height'],
+                            0, '#d4b68a',
+                            10, '#c4a882',
+                            30, '#b89878'
+                        ],
+                        'fill-extrusion-height': ['get', 'render_height'],
+                        'fill-extrusion-opacity': 0.85
+                    }
+                }, 'waterway-label');
+                console.log('✅ Edificios 3D activados');
+            } catch(e) {
+                console.warn('⚠️ No se pudieron cargar los edificios 3D:', e);
+            }
+            
+            // Cargar capas de vías
+            loadVias3d();
+            
+            // Añadir marcadores de puntos
+            addPointMarkers3d();
+            
+            // Mostrar el mapa 3D después de cargar
+            container.style.display = 'block';
+            container.classList.add('active');
+        });
+        
+        map3d.on('error', function(e) {
+            console.error('❌ Error en mapa 3D:', e);
+        });
+        
+        // Controles
+        map3d.addControl(new maplibregl.NavigationControl(), 'top-right');
+        map3d.addControl(new maplibregl.ScaleControl(), 'bottom-right');
+        
+        // Ocultar inicialmente
+        container.style.display = 'none';
+    }
+    
+    function loadVias3d() {
+        // Cargar carreteras
+        fetch('https://raw.githubusercontent.com/alfonsojimenez876-cmyk/CAPAS-PROYECTO-CAZA-CON-ARCO-RIOS-MANILVA/refs/heads/main/CARRETERAS.geojson')
+            .then(r => r.json())
+            .then(data => {
+                try {
+                    map3d.addSource('carreteras', {
+                        'type': 'geojson',
+                        'data': data
+                    });
+                    map3d.addLayer({
+                        'id': 'carreteras-line',
+                        'type': 'line',
+                        'source': 'carreteras',
+                        'paint': {
+                            'line-color': '#ff8800',
+                            'line-width': 3,
+                            'line-opacity': 0.85,
+                            'line-blur': 0.5
+                        }
+                    });
+                    console.log('✅ Carreteras cargadas en 3D');
+                } catch(e) {
+                    console.warn('⚠️ Error al cargar carreteras 3D:', e);
+                }
+            })
+            .catch(e => console.warn('⚠️ Error descargando carreteras:', e));
+        
+        // Cargar caminos
+        fetch('https://raw.githubusercontent.com/alfonsojimenez876-cmyk/CAPAS-PROYECTO-CAZA-CON-ARCO-RIOS-MANILVA/refs/heads/main/CAMINOS-CALLEJERO.geojson')
+            .then(r => r.json())
+            .then(data => {
+                try {
+                    map3d.addSource('caminos', {
+                        'type': 'geojson',
+                        'data': data
+                    });
+                    map3d.addLayer({
+                        'id': 'caminos-line',
+                        'type': 'line',
+                        'source': 'caminos',
+                        'paint': {
+                            'line-color': '#8B7355',
+                            'line-width': 2,
+                            'line-opacity': 0.6,
+                            'line-dasharray': [4, 4]
+                        }
+                    });
+                    console.log('✅ Caminos cargados en 3D');
+                } catch(e) {
+                    console.warn('⚠️ Error al cargar caminos 3D:', e);
+                }
+            })
+            .catch(e => console.warn('⚠️ Error descargando caminos:', e));
+    }
+    
+    function addPointMarkers3d() {
+        INSPECTION_POINTS.forEach((point, idx) => {
+            const el = document.createElement('div');
+            el.className = 'simple-marker';
+            el.style.width = '18px';
+            el.style.height = '18px';
+            el.style.background = '#2ecc71';
+            el.style.borderRadius = '50%';
+            el.style.border = '3px solid white';
+            el.style.boxShadow = '0 0 15px rgba(46, 204, 113, 0.6)';
+            el.style.cursor = 'pointer';
+            
+            const popupContent = `<strong>${point.name}</strong><br>Total: ${point.wastes.reduce((s,w)=>s+w.volume,0)} m³`;
+            
+            const marker = new maplibregl.Marker(el)
+                .setLngLat([point.lng, point.lat])
+                .setPopup(new maplibregl.Popup({ offset: 25 })
+                    .setHTML(popupContent))
+                .addTo(map3d);
+            
+            maplibreMarkers.push(marker);
+        });
+    }
+    
+    function toggleMap3d() {
+        const mapEl = document.getElementById('map');
+        const map3dEl = document.getElementById('map3d');
+        const controls = document.getElementById('controls3d');
+        const toggleBtn = document.getElementById('toggleMap');
+        const label = document.getElementById('toggleLabel');
+        
+        is3dActive = !is3dActive;
+        
+        if (is3dActive) {
+            // Ocultar 2D, mostrar 3D
+            mapEl.style.display = 'none';
+            map3dEl.style.display = 'block';
+            map3dEl.classList.add('active');
+            controls.classList.add('visible');
+            toggleBtn.classList.add('active');
+            label.textContent = 'Desactivar 3D';
+            
+            // Centrar en la posición actual del vehículo si existe
+            if (vehicleMarker) {
+                const pos = vehicleMarker.getLatLng();
+                map3d.flyTo({
+                    center: [pos.lng, pos.lat],
+                    zoom: 15,
+                    pitch: 50,
+                    duration: 1500
+                });
+            } else {
+                map3d.flyTo({
+                    center: [-5.1450, 36.4267],
+                    zoom: 14.5,
+                    pitch: 50,
+                    duration: 1500
+                });
+            }
+        } else {
+            // Mostrar 2D, ocultar 3D
+            mapEl.style.display = 'block';
+            map3dEl.style.display = 'none';
+            map3dEl.classList.remove('active');
+            controls.classList.remove('visible');
+            toggleBtn.classList.remove('active');
+            label.textContent = 'Activar 3D';
+            
+            // Redimensionar el mapa 2D
+            setTimeout(() => map.invalidateSize(), 100);
+        }
+    }
+
+    // ================= GRÁFICO DE TORTA (panel) =================
+    function createPieChartImage(wastes, size = 56, opacity = 0.9) {
+        const totalVolume = wastes.reduce((sum, w) => sum + w.volume, 0);
+        if (totalVolume === 0) return null;
+        const canvas = document.createElement('canvas');
+        canvas.width = size; canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, size, size);
+        ctx.beginPath();
+        ctx.arc(size/2, size/2, size/2 - 1, 0, 2 * Math.PI);
+        ctx.fillStyle = `rgba(30, 40, 45, ${opacity})`;
+        ctx.fill();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        let startAngle = -Math.PI / 2;
+        const centerX = size/2, centerY = size/2, radius = size/2 - 3;
+        wastes.forEach(waste => {
+            const angle = (waste.volume / totalVolume) * 2 * Math.PI;
+            const endAngle = startAngle + angle;
+            ctx.beginPath();
+            ctx.fillStyle = waste.color;
+            ctx.moveTo(centerX, centerY);
+            ctx.arc(centerX, centerY, radius, startAngle, endAngle);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = 1;
+            ctx.moveTo(centerX, centerY);
+            ctx.arc(centerX, centerY, radius, startAngle, endAngle);
+            ctx.lineTo(centerX, centerY);
+            ctx.stroke();
+            startAngle = endAngle;
+        });
+        ctx.beginPath();
+        ctx.fillStyle = `rgba(30, 47, 58, ${opacity})`;
+        ctx.arc(centerX, centerY, radius * 0.25, 0, 2 * Math.PI);
+        ctx.fill();
+        return canvas.toDataURL();
+    }
+
+    // ================= DIBUJAR MARCADORES 2D =================
+    function drawSimpleMarkers() {
+        markersGroup.clearLayers();
+        pointMarkers = [];
+        INSPECTION_POINTS.forEach((point, idx) => {
+            const isVisited = visitedPoints.has(idx);
+            const icon = L.divIcon({
+                html: `<div class="${isVisited ? 'simple-marker-visited' : 'simple-marker'}"></div>`,
+                iconSize: [12,12],
+                iconAnchor: [6,6],
+                className: ''
+            });
+            let tooltip = `<strong>${point.name}</strong><br>`;
+            point.wastes.forEach(w => tooltip += `${w.type}: ${w.volume} m³<br>`);
+            tooltip += `<strong>Total: ${point.wastes.reduce((s,w)=>s+w.volume,0)} m³</strong>`;
+            const marker = L.marker([point.lat, point.lng], { icon }).addTo(markersGroup).bindTooltip(tooltip, { sticky: true });
+            pointMarkers.push(marker);
+        });
+        markersGroup.addTo(map);
+    }
+
+    // ================= RENDERIZAR DETALLES EN PANEL =================
+    function renderWasteDetail(point) {
+        const container = document.getElementById('wasteDetailContainer');
+        if (!point) {
+            container.innerHTML = '<div style="text-align:center;opacity:0.6;padding:8px;">Selecciona un punto</div>';
+            return;
+        }
+        const total = point.wastes.reduce((s, w) => s + w.volume, 0);
+        const imgData = createPieChartImage(point.wastes, 56, 0.9);
+        
+        let html = `<div class="mini-pie-container">`;
+        if (imgData) {
+            html += `<img src="${imgData}" class="mini-pie-canvas" style="width:56px;height:56px;">`;
+        }
+        html += `<div class="waste-detail">`;
+        point.wastes.forEach(w => {
+            const pct = total > 0 ? ((w.volume / total) * 100).toFixed(1) : 0;
+            html += `<div class="waste-detail-item">
+                <span class="waste-name"><span class="waste-color-dot" style="background:${w.color};"></span>${w.type}</span>
+                <span><span class="waste-value">${w.volume}</span> m³ <span class="waste-percent">(${pct}%)</span></span>
+            </div>`;
+        });
+        html += `<div class="total-vol">Total: ${total.toFixed(1)} m³</div>`;
+        html += `</div></div>`;
+        container.innerHTML = html;
+    }
+
+    // ================= INICIALIZACIÓN MAPA 2D =================
+    function initMap() {
+        activeBaseLayer = baseLayers.esri;
+        map = L.map('map').setView([36.4267, -5.1450], 15);
+        activeBaseLayer.addTo(map);
+        drawSimpleMarkers();
+        renderPointsList();
+        routePoints = INSPECTION_POINTS.map(p => L.latLng(p.lat, p.lng));
+        renderWasteDetail(INSPECTION_POINTS[0]);
+        document.getElementById('pointName').innerText = INSPECTION_POINTS[0].name;
+    }
+
+    // ================= RESTO DE FUNCIONES (simulación, rutas, etc.) =================
+    function changeBaseLayer(layerId) {
+        if (activeBaseLayer) map.removeLayer(activeBaseLayer);
+        activeBaseLayer = baseLayers[layerId] || baseLayers.esri;
+        activeBaseLayer.addTo(map);
+    }
+
+    function calculateFullRoute() {
+        return new Promise((resolve, reject) => {
+            if (routingControl) map.removeControl(routingControl);
+            routingControl = L.Routing.control({
+                waypoints: routePoints, routeWhileDragging: false, showAlternatives: false,
+                lineOptions: { styles: [{ color: '#2ecc71', weight: 5, opacity: 0.8 }] },
+                createMarker: () => null, router: L.Routing.osrmv1({ serviceUrl: 'https://router.project-osrm.org/route/v1' })
+            }).addTo(map);
+            setTimeout(() => { const c = document.querySelector('.leaflet-routing-container'); if(c) c.style.display = 'none'; }, 100);
+            routingControl.on('routesfound', e => resolve(e.routes[0].coordinates.map(c => L.latLng(c.lat, c.lng))));
+            routingControl.on('routingerror', reject);
+        });
+    }
+
+    function injectWaypointsIntoRoute(routeCoords, waypoints) {
+        let newRoute = [...routeCoords];
+        waypoints.forEach(wp => {
+            let minDist = Infinity, insertIndex = 0;
+            newRoute.forEach((coord, idx) => { const d = coord.distanceTo(wp); if(d < minDist) { minDist = d; insertIndex = idx; } });
+            newRoute.splice(insertIndex, 0, wp);
+        });
+        return newRoute;
+    }
+
+    function initVehicle() {
+        if (vehicleMarker) map.removeLayer(vehicleMarker);
+        const animatedIcon = L.divIcon({ 
+            html: '<div class="animated-point"></div>', 
+            iconSize: [16,16], 
+            iconAnchor: [8,8], 
+            className: 'vehicle-centered' 
+        });
+        vehicleMarker = L.marker(routePoints[0], { icon: animatedIcon, zIndexOffset: 2000 }).addTo(map);
+        map.setView(routePoints[0], 16);
+    }
+
+    function addPointVolume(pointIndex) {
+        if (visitedPoints.has(pointIndex)) return;
+        const point = INSPECTION_POINTS[pointIndex];
+        let total = point.wastes.reduce((s,w) => s+w.volume, 0);
+        accumulatedTotal += total;
+        visitedPoints.add(pointIndex);
+        document.getElementById('accumulatedVolume').innerText = accumulatedTotal.toFixed(1);
+        document.getElementById('pointName').innerText = point.name;
+        renderWasteDetail(point);
+        updatePointListStatus(pointIndex);
+        drawSimpleMarkers();
+        
+        if (vehicleMarker && pointMarkers[pointIndex]) {
+            const pointLatLng = pointMarkers[pointIndex].getLatLng();
+            vehicleMarker.setLatLng(pointLatLng);
+            map.setView(pointLatLng, map.getZoom());
+        }
+    }
+
+    function updatePointListStatus(activeIdx) {
+        document.querySelectorAll('.point-item').forEach((item, idx) => {
+            item.classList.remove('active');
+            if(idx === activeIdx) item.classList.add('active');
+            if(visitedPoints.has(idx)) item.classList.add('visited');
+            else item.classList.remove('visited');
+        });
+    }
+
+    function renderPointsList() {
+        const container = document.getElementById('pointsListContainer');
+        container.innerHTML = '';
+        INSPECTION_POINTS.forEach((p, idx) => {
+            const totalVol = p.wastes.reduce((s,w) => s+w.volume, 0);
+            const div = document.createElement('div');
+            div.className = 'point-item';
+            div.innerHTML = `<div class="point-name-list"><span>${p.name}</span><span class="point-total">${totalVol} m³</span></div><div style="font-size:0.7rem;">${p.wastes.length} tipos</div>`;
+            div.onclick = () => { if(!isAnimating) map.setView([p.lat, p.lng], 16); };
+            container.appendChild(div);
+        });
+    }
+
+    function startStopAtPoint(pointIndex) {
+        if(stopTimerInterval) clearInterval(stopTimerInterval);
+        isStoppedAtPoint = true;
+        let remaining = 5;
+        const countdownSpan = document.getElementById('countdownDisplay');
+        const progressFill = document.getElementById('progressFill');
+        if(!visitedPoints.has(pointIndex)) addPointVolume(pointIndex);
+        currentPointIdx = pointIndex;
+        
+        if (vehicleMarker && pointMarkers[pointIndex]) {
+            const pointLatLng = pointMarkers[pointIndex].getLatLng();
+            vehicleMarker.setLatLng(pointLatLng);
+            map.setView(pointLatLng, map.getZoom());
+        }
+        
+        const interval = setInterval(() => {
+            if(!isStoppedAtPoint) { clearInterval(interval); return; }
+            remaining--;
+            countdownSpan.innerText = remaining;
+            progressFill.style.width = `${((5-remaining)/5)*100}%`;
+            if(remaining <= 0) {
+                clearInterval(interval);
+                isStoppedAtPoint = false;
+                countdownSpan.innerText = "0";
+                progressFill.style.width = "100%";
+                if(isAnimating) startMoving();
+            }
+        }, 1000);
+        stopTimerInterval = interval;
+    }
+
+    function startMoving() {
+        if(moveInterval) cancelAnimationFrame(moveInterval);
+        if(!routeCoordinates.length || currentRouteIndex >= routeCoordinates.length-1) {
+            if(routeCoordinates.length && currentRouteIndex >= routeCoordinates.length-1) endRoute();
+            return;
+        }
+        const baseSpeed = 12;
+        const speedMultiplier = animationSpeed;
+        const effectiveSpeed = baseSpeed * speedMultiplier;
+        let lastTimestamp = null;
+        
+        function animateMovement(timestamp) {
+            if (!isAnimating || isStoppedAtPoint) {
+                if (moveInterval) cancelAnimationFrame(moveInterval);
+                moveInterval = null;
+                return;
+            }
+            if (!lastTimestamp) {
+                lastTimestamp = timestamp;
+                moveInterval = requestAnimationFrame(animateMovement);
+                return;
+            }
+            const deltaTime = Math.min(100, timestamp - lastTimestamp) / 1000;
+            if (deltaTime <= 0) {
+                lastTimestamp = timestamp;
+                moveInterval = requestAnimationFrame(animateMovement);
+                return;
+            }
+            const distanceToMove = effectiveSpeed * deltaTime;
+            let currentPos = vehicleMarker.getLatLng();
+            let targetIndex = currentRouteIndex + 1;
+            if (targetIndex >= routeCoordinates.length) {
+                endRoute();
+                cancelAnimationFrame(moveInterval);
+                moveInterval = null;
+                return;
+            }
+            let targetPos = routeCoordinates[targetIndex];
+            let distanceToTarget = currentPos.distanceTo(targetPos);
+            if (distanceToMove >= distanceToTarget) {
+                vehicleMarker.setLatLng(targetPos);
+                map.setView(targetPos, map.getZoom());
+                currentRouteIndex = targetIndex;
+                lastTimestamp = timestamp;
+                for(let i=0; i<routePoints.length; i++) {
+                    if(targetPos.distanceTo(routePoints[i]) < 40 && i !== currentPointIdx && !isStoppedAtPoint && !visitedPoints.has(i)) {
+                        if(moveInterval) { cancelAnimationFrame(moveInterval); moveInterval = null; }
+                        startStopAtPoint(i);
+                        return;
+                    }
+                }
+                if (currentRouteIndex >= routeCoordinates.length - 1 && !isStoppedAtPoint) {
+                    endRoute();
+                    if(moveInterval) cancelAnimationFrame(moveInterval);
+                    moveInterval = null;
+                    return;
+                }
+                moveInterval = requestAnimationFrame(animateMovement);
+            } else {
+                const ratio = distanceToMove / distanceToTarget;
+                const newLat = currentPos.lat + (targetPos.lat - currentPos.lat) * ratio;
+                const newLng = currentPos.lng + (targetPos.lng - currentPos.lng) * ratio;
+                const newPos = L.latLng(newLat, newLng);
+                vehicleMarker.setLatLng(newPos);
+                map.setView(newPos, map.getZoom());
+                lastTimestamp = timestamp;
+                moveInterval = requestAnimationFrame(animateMovement);
+            }
+        }
+        if (moveInterval) cancelAnimationFrame(moveInterval);
+        moveInterval = requestAnimationFrame(animateMovement);
+    }
+
+    function endRoute() {
+        isAnimating = false;
+        if(stopTimerInterval) clearInterval(stopTimerInterval);
+        if(moveInterval) cancelAnimationFrame(moveInterval);
+        moveInterval = null;
+        alert(`Inspección completada. Volumen total verificado: ${accumulatedTotal.toFixed(1)} m³`);
+        updateButtonsState();
+    }
+
+    async function startRoute() {
+        if(isAnimating) return;
+        resetSimulation();
+        document.getElementById('startBtn').innerHTML = '<i class="fas fa-spinner fa-spin"></i> Calculando...';
+        document.getElementById('startBtn').disabled = true;
+        try {
+            const coords = await calculateFullRoute();
+            routeCoordinates = injectWaypointsIntoRoute(coords, routePoints);
+            initVehicle();
+            currentRouteIndex = 0; 
+            currentPointIdx = -1; 
+            accumulatedTotal = 0; 
+            visitedPoints.clear();
+            document.getElementById('accumulatedVolume').innerText = "0";
+            drawSimpleMarkers();
+            addPointVolume(0);
+            isAnimating = true; 
+            isStoppedAtPoint = false;
+            startMoving();
+            updateButtonsState();
+        } catch(e) { 
+            console.error(e); 
+            alert("Error al calcular la ruta. Reintente."); 
+            resetSimulation();
+        }
+        finally { 
+            document.getElementById('startBtn').innerHTML = '<i class="fas fa-play"></i> Iniciar'; 
+            document.getElementById('startBtn').disabled = false; 
+        }
+    }
+
+    function pauseRoute() { 
+        if(!isAnimating) return; 
+        isAnimating=false; 
+        if(moveInterval){ cancelAnimationFrame(moveInterval); moveInterval=null; } 
+        if(stopTimerInterval){ clearInterval(stopTimerInterval); stopTimerInterval=null; } 
+        updateButtonsState(); 
+    }
+    
+    function resumeRoute() { 
+        if(isAnimating) return; 
+        if(routeCoordinates.length===0){ startRoute(); return; } 
+        isAnimating=true; 
+        if(isStoppedAtPoint) { startStopAtPoint(currentPointIdx); } 
+        else { startMoving(); } 
+        updateButtonsState(); 
+    }
+    
+    function resetSimulation() { 
+        isAnimating=false; 
+        isStoppedAtPoint=false; 
+        if(moveInterval){ cancelAnimationFrame(moveInterval); moveInterval=null; } 
+        if(stopTimerInterval){ clearInterval(stopTimerInterval); stopTimerInterval=null; } 
+        currentRouteIndex=0; 
+        currentPointIdx=-1; 
+        accumulatedTotal=0; 
+        visitedPoints.clear(); 
+        document.getElementById('accumulatedVolume').innerText="0"; 
+        document.getElementById('countdownDisplay').innerText="0"; 
+        document.getElementById('progressFill').style.width="0%"; 
+        if(vehicleMarker && routePoints[0]) vehicleMarker.setLatLng(routePoints[0]); 
+        map.setView([36.4267,-5.1450],15); 
+        updatePointListStatus(-1); 
+        updateButtonsState(); 
+        if (INSPECTION_POINTS.length) {
+            renderWasteDetail(INSPECTION_POINTS[0]);
+            document.getElementById('pointName').innerText = INSPECTION_POINTS[0].name;
+        }
+        drawSimpleMarkers();
+    }
+    
+    function stopAndReset() { 
+        pauseRoute(); 
+        resetSimulation(); 
+        if(routingControl){ map.removeControl(routingControl); routingControl=null; } 
+        routeCoordinates=[]; 
+        updateButtonsState(); 
+    }
+    
+    function updateButtonsState() { 
+        const startBtn=document.getElementById('startBtn'), 
+              pauseBtn=document.getElementById('pauseBtn'); 
+        if(isAnimating){ 
+            startBtn.disabled=true; 
+            pauseBtn.disabled=false; 
+            pauseBtn.innerHTML='<i class="fas fa-pause"></i> Pausar'; 
+        } else { 
+            startBtn.disabled=false; 
+            pauseBtn.disabled=false; 
+            pauseBtn.innerHTML='<i class="fas fa-play"></i> Reanudar'; 
+        } 
+    }
+    
+    function initSpeedControl() { 
+        const slider = document.getElementById('speedSlider'), 
+              valSpan = document.getElementById('speedValue'); 
+        slider.addEventListener('input', (e) => { 
+            animationSpeed = parseFloat(e.target.value); 
+            valSpan.innerText = animationSpeed.toFixed(1) + "x"; 
+            if(isAnimating && !isStoppedAtPoint && moveInterval) { 
+                cancelAnimationFrame(moveInterval);
+                startMoving();
+            } 
+        }); 
+    }
+
+    // ================= EVENT LISTENERS =================
+    document.getElementById('startBtn').onclick = startRoute;
+    document.getElementById('pauseBtn').onclick = () => { 
+        if(isAnimating) pauseRoute(); 
+        else resumeRoute(); 
+    };
+    document.getElementById('stopBtn').onclick = stopAndReset;
+    document.getElementById('mapSelector').addEventListener('change', (e) => changeBaseLayer(e.target.value));
+    document.getElementById('toggleMap').onclick = toggleMap3d;
+    
+    document.getElementById('resetView').onclick = () => {
+        if (map3d) {
+            map3d.flyTo({
+                center: [-5.1450, 36.4267],
+                zoom: 14,
+                pitch: 45,
+                bearing: 0,
+                duration: 1500
+            });
+        }
+    };
+    
+    document.getElementById('toggleTerrain').onclick = () => {
+        terrainEnabled = !terrainEnabled;
+        if (map3d) {
+            try {
+                map3d.setTerrain(terrainEnabled ? { 'source': 'terrain-source', 'exaggeration': 1.8 } : null);
+            } catch(e) {
+                console.warn('Error al cambiar terreno:', e);
+            }
+            document.getElementById('toggleTerrain').classList.toggle('active');
+        }
+    };
+    
+    document.getElementById('toggleBuildings').onclick = () => {
+        buildingsEnabled = !buildingsEnabled;
+        if (map3d) {
+            try {
+                map3d.setLayoutProperty('buildings-3d', 'visibility', buildingsEnabled ? 'visible' : 'none');
+            } catch(e) {
+                console.warn('Error al cambiar edificios:', e);
+            }
+            document.getElementById('toggleBuildings').classList.toggle('active');
+        }
+    };
+
+    // ================= INICIALIZACIÓN =================
+    console.log('🚀 Iniciando aplicación...');
+    initMap();
+    initSpeedControl();
+    updateButtonsState();
+    
+    // Inicializar 3D después de un breve retraso para asegurar que todo está listo
+    setTimeout(() => {
+        initMap3d();
+        console.log('✅ Aplicación lista. Usa el botón "Activar 3D" para cambiar a vista 3D.');
+    }, 500);
+</script>
+</body>
+</html>
